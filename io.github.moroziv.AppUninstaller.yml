@@ -1,0 +1,26 @@
+app-id: io.github.moroziv.AppUninstaller
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: app-uninstaller
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --filesystem=host
+  - --filesystem=xdg-config/fontconfig:ro
+  - --talk-name=org.freedesktop.Flatpak
+modules:
+  - name: app-uninstaller
+    buildsystem: simple
+    build-commands:
+      - install -D -m 0755 app-uninstaller /app/bin/app-uninstaller
+      - install -D -m 0644 io.github.moroziv.AppUninstaller.desktop /app/share/applications/io.github.moroziv.AppUninstaller.desktop
+      - install -D -m 0644 io.github.moroziv.AppUninstaller.png /app/share/icons/hicolor/128x128/apps/io.github.moroziv.AppUninstaller.png
+    sources:
+      - type: file
+        path: app-uninstaller
+      - type: file
+        path: io.github.moroziv.AppUninstaller.desktop
+      - type: file
+        path: io.github.moroziv.AppUninstaller.png
