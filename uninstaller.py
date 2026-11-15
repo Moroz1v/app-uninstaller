@@ -8,9 +8,9 @@ import threading
 
 try:
     import tkinter as tk
-    from tkinter import ttk, messagebox
+    from tkinter import ttk
 except ImportError:
-    print("Нужно установить пакет: sudo dnf install python3-tkinter")
+    print("Please install tkinter: sudo dnf install python3-tkinter")
     exit(1)
 
 try:
@@ -23,39 +23,28 @@ except ImportError:
 IS_FLATPAK = bool(os.environ.get('FLATPAK_ID')) or os.path.exists('/.flatpak-info')
 
 
-def wrap_host_cmd(cmd):
-    if IS_FLATPAK:
-        return ['flatpak-spawn', '--host'] + cmd
-    return cmd
-
-
-def host_path(path):
-    if not path:
-        return path
-    if IS_FLATPAK and (path.startswith('/usr/') or path.startswith('/var/') or path.startswith('/etc/')):
-        mapped = '/run/host' + path
-        if os.path.exists(mapped):
-            return mapped
-    return path
+def host_cmd(cmd):
+    """Wraps command with flatpak-spawn --host when running inside Flatpak sandbox."""
+    if IS_FLATPAK and shutil.which('flatpak-spawn'):
+        return ['flatpak-spawn', '--host'] + list(cmd)
+    return list(cmd)
 
 
 def host_which(binary):
-    if not IS_FLATPAK:
-        return bool(shutil.which(binary))
-    try:
-        res = subprocess.run(
-            ['flatpak-spawn', '--host', 'which', binary],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        return res.returncode == 0
-    except Exception:
-        return False
+    """Checks if a binary exists on the host system."""
+    if IS_FLATPAK:
+        try:
+            res = subprocess.run(
+                ['flatpak-spawn', '--host', 'which', binary],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
+    return shutil.which(binary) is not None
 
 
-# ==========================================
-# Фирменная палитра (Красный стиль)
-# ==========================================
 COLORS = {
     'brand': '#C62828',
     'brand_dark': '#8E0000',
@@ -76,14 +65,10 @@ COLORS = {
 
 CRITICAL_PACKAGES = {
     'kernel', 'kernel-core', 'systemd', 'glibc', 'bash', 'dnf', 'rpm',
-    'sudo', 'passwd', 'grub2', 'xorg-x11-server-Xorg', 'networkmanager',
-    'apt', 'dpkg', 'pacman'
+    'sudo', 'passwd', 'grub2', 'xorg-x11-server-xorg', 'networkmanager'
 }
 
 
-# ==========================================
-# Работа с пакетными менеджерами
-# ==========================================
 def detect_managers():
     managers = []
     if host_which('dnf') or host_which('yum') or host_which('rpm'):
@@ -104,7 +89,7 @@ def detect_managers():
 def get_packages_flatpak():
     try:
         out = subprocess.check_output(
-            wrap_host_cmd(['flatpak', 'list', '--app', '--columns=application,name,version']),
+            host_cmd(['flatpak', 'list', '--app', '--columns=application,name,version']),
             universal_newlines=True,
             stderr=subprocess.DEVNULL
         )
@@ -115,7 +100,7 @@ def get_packages_flatpak():
                 packages.append({
                     'name': parts[1] if parts[1] else parts[0],
                     'id': parts[0],
-                    'version': parts[2] if len(parts) >= 3 and parts[2].strip() else '—',
+                    'version': parts[2] if len(parts) >= 3 and parts[2] else '—',
                     'manager': 'flatpak'
                 })
         return packages
@@ -126,7 +111,7 @@ def get_packages_flatpak():
 def get_packages_snap():
     try:
         out = subprocess.check_output(
-            wrap_host_cmd(['snap', 'list']),
+            host_cmd(['snap', 'list']),
             universal_newlines=True,
             stderr=subprocess.DEVNULL
         )
@@ -148,7 +133,7 @@ def get_packages_snap():
 def get_packages_apt():
     try:
         out = subprocess.check_output(
-            wrap_host_cmd(['dpkg-query', '-W', '-f=${Package}\t${Version}\n']),
+            host_cmd(['dpkg-query', '-W', '-f=${Package}\t${Version}\n']),
             universal_newlines=True,
             stderr=subprocess.DEVNULL
         )
@@ -170,7 +155,7 @@ def get_packages_apt():
 def get_packages_pacman():
     try:
         out = subprocess.check_output(
-            wrap_host_cmd(['pacman', '-Q']),
+            host_cmd(['pacman', '-Q']),
             universal_newlines=True,
             stderr=subprocess.DEVNULL
         )
@@ -192,7 +177,7 @@ def get_packages_pacman():
 def get_packages_rpm():
     try:
         out = subprocess.check_output(
-            wrap_host_cmd(['rpm', '-qa', '--qf', '%{NAME}\t%{VERSION}-%{RELEASE}\n']),
+            host_cmd(['rpm', '-qa', '--qf', '%{NAME}\t%{VERSION}-%{RELEASE}\n']),
             universal_newlines=True,
             stderr=subprocess.DEVNULL
         )
@@ -220,21 +205,33 @@ def get_packages_zypper():
     return []
 
 
-# ==========================================
-# Поиск, загрузка и генерация иконок
-# ==========================================
+def resolve_host_path(path):
+    """Resolves /usr paths to /run/host/usr when running inside Flatpak."""
+    if IS_FLATPAK and path.startswith('/usr/'):
+        host_p = '/run/host' + path
+        if os.path.exists(host_p):
+            return host_p
+    return path
+
+
 def load_desktop_metadata():
-    """Собирает иконки и локализованные названия приложений из .desktop файлов."""
+    """Collects icon names and English application names from .desktop files."""
     icons = {}
-    ru_names = {}
-    raw_dirs = [
-        '/app/share/applications', '/usr/share/applications',
+    app_names = {}
+    dirs = [
+        '/app/share/applications',
+        '/usr/share/applications',
         '/usr/local/share/applications',
         os.path.expanduser('~/.local/share/applications'),
         '/var/lib/flatpak/exports/share/applications',
-        os.path.expanduser('~/.local/share/flatpak/exports/share/applications')
+        os.path.expanduser('~/.local/share/flatpak/exports/share/applications'),
     ]
-    dirs = [host_path(d) for d in raw_dirs]
+    if IS_FLATPAK:
+        dirs.extend([
+            '/run/host/usr/share/applications',
+            '/run/host/usr/local/share/applications',
+            '/run/host/var/lib/flatpak/exports/share/applications',
+        ])
 
     for d in dirs:
         if not os.path.isdir(d):
@@ -245,7 +242,6 @@ def load_desktop_metadata():
             path = os.path.join(d, f)
             try:
                 name = None
-                name_ru = None
                 icon = None
                 exec_cmd = None
                 no_display = False
@@ -254,8 +250,6 @@ def load_desktop_metadata():
                         line = line.strip()
                         if line.startswith('Name=') and not name:
                             name = line[5:].strip()
-                        elif line.startswith('Name[ru]=') and not name_ru:
-                            name_ru = line[9:].strip()
                         elif line.startswith('Icon=') and not icon:
                             icon = line[5:].strip()
                         elif line.startswith('Exec=') and not exec_cmd:
@@ -270,35 +264,42 @@ def load_desktop_metadata():
                     icons[base] = icon
                     if name:
                         icons[name.lower()] = icon
-                    if name_ru:
-                        icons[name_ru.lower()] = icon
                     if exec_cmd:
                         icons[exec_cmd.lower()] = icon
 
-                if not no_display and (name_ru or name):
-                    display = name_ru if name_ru else name
-                    ru_names[base] = display
+                if not no_display and name:
+                    app_names[base] = name
                     if exec_cmd:
-                        ru_names[exec_cmd.lower()] = display
+                        app_names[exec_cmd.lower()] = name
             except Exception:
                 pass
-    return icons, ru_names
+    return icons, app_names
 
 
 def build_icon_index():
-    """Индексирует PNG иконки в системных и пользовательских директориях."""
+    """Indexes PNG icons in system, user, and Flatpak directories."""
     index = {}
-    raw_roots = [
-        '/app/share/icons/hicolor', '/usr/share/pixmaps',
+    search_roots = [
+        '/app/share/icons/hicolor',
+        '/usr/share/pixmaps',
         '/usr/share/icons/hicolor',
         '/usr/share/icons/Papirus',
         '/usr/share/icons/Adwaita',
         '/usr/share/icons/breeze',
         '/var/lib/flatpak/exports/share/icons/hicolor',
-        os.path.expanduser('~/.local/share/flatpak/exports/share/icons/hicolor'), '/var/home/moroziv/.local/share/flatpak/exports/share/icons/hicolor',
+        os.path.expanduser('~/.local/share/flatpak/exports/share/icons/hicolor'),
         os.path.expanduser('~/.local/share/icons')
     ]
-    search_roots = [host_path(r) for r in raw_roots]
+    if IS_FLATPAK:
+        search_roots.extend([
+            '/run/host/usr/share/pixmaps',
+            '/run/host/usr/share/icons/hicolor',
+            '/run/host/usr/share/icons/Papirus',
+            '/run/host/usr/share/icons/Adwaita',
+            '/run/host/usr/share/icons/breeze',
+            '/run/host/var/lib/flatpak/exports/share/icons/hicolor',
+        ])
+
     preferred_sizes = ['32x32', '48x48', '24x24', '64x64', '128x128', '256x256', '16x16']
 
     for root_dir in search_roots:
@@ -320,16 +321,18 @@ def build_icon_index():
 
 
 def load_icon_image(path, size=24):
-    path = host_path(path)
-    if not path or not os.path.exists(path):
+    if not path:
+        return None
+    real_path = resolve_host_path(path)
+    if not os.path.exists(real_path):
         return None
     try:
         if HAS_PIL:
-            img = Image.open(path).convert("RGBA")
+            img = Image.open(real_path).convert("RGBA")
             img = img.resize((size, size), Image.Resampling.LANCZOS)
             return ImageTk.PhotoImage(img)
         else:
-            img = tk.PhotoImage(file=path)
+            img = tk.PhotoImage(file=real_path)
             w, h = img.width(), img.height()
             if w > size or h > size:
                 factor = max(round(w / size), round(h / size))
@@ -340,23 +343,7 @@ def load_icon_image(path, size=24):
         return None
 
 
-def find_app_window_icon():
-    """Ищет иконку самого приложения для заголовка окна."""
-    candidates = [
-        '/app/share/icons/hicolor/128x128/apps/io.github.moroziv.AppUninstaller.png',
-        '/usr/share/pixmaps/app-uninstaller.png',
-        '/usr/share/icons/hicolor/128x128/apps/app-uninstaller.png',
-        os.path.expanduser('~/.local/share/icons/app-uninstaller.png'),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app-uninstaller.png'),
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    return None
-
-
 def create_default_icon(size=24):
-    """Аккуратная иконка пакета для системных компонентов."""
     img = tk.PhotoImage(width=size, height=size)
     img.put('#E4E8EE', to=(3, 4, size - 3, size - 3))
     img.put('#B0BEC5', to=(6, 9, size - 6, size - 6))
@@ -379,24 +366,128 @@ def find_terminal():
     return None, None
 
 
-# ==========================================
-# Главное окно приложения
-# ==========================================
-class UninstallerApp:
+class CustomDialog(tk.Toplevel):
+    """Custom modal dialog with explicit English buttons (OK / Yes / No)."""
+    def __init__(self, parent, title, message, dialog_type="info", is_warning=False):
+        super().__init__(parent)
+        self.result = False
+        self.title(title)
+        self.configure(bg=COLORS['bg_card'])
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        header_bg = COLORS['danger'] if is_warning else COLORS['brand']
+        top_bar = tk.Frame(self, bg=header_bg, height=6)
+        top_bar.pack(fill=tk.X)
+
+        body = tk.Frame(self, bg=COLORS['bg_card'], padx=24, pady=20)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        lbl_title = tk.Label(
+            body,
+            text=title,
+            bg=COLORS['bg_card'],
+            fg=COLORS['danger'] if is_warning else COLORS['text_primary'],
+            font=("DejaVu Sans", 11, "bold"),
+            anchor="w",
+            justify="left"
+        )
+        lbl_title.pack(fill=tk.X, pady=(0, 8))
+
+        lbl_msg = tk.Label(
+            body,
+            text=message,
+            bg=COLORS['bg_card'],
+            fg=COLORS['text_primary'],
+            font=("DejaVu Sans", 10),
+            wraplength=420,
+            justify="left",
+            anchor="w"
+        )
+        lbl_msg.pack(fill=tk.X, pady=(0, 20))
+
+        btn_frame = tk.Frame(body, bg=COLORS['bg_card'])
+        btn_frame.pack(fill=tk.X)
+
+        if dialog_type == "yesno":
+            btn_no = tk.Button(
+                btn_frame,
+                text="No",
+                command=self.on_no,
+                bg="#E4E8EE",
+                fg=COLORS['text_primary'],
+                activebackground="#D0D7DE",
+                relief="flat",
+                font=("DejaVu Sans", 10, "bold"),
+                padx=20,
+                pady=6,
+                cursor="hand2"
+            )
+            btn_no.pack(side=tk.RIGHT, padx=(8, 0))
+
+            btn_yes = tk.Button(
+                btn_frame,
+                text="Yes",
+                command=self.on_yes,
+                bg=COLORS['danger'],
+                fg="#FFFFFF",
+                activebackground=COLORS['danger_hover'],
+                activeforeground="#FFFFFF",
+                relief="flat",
+                font=("DejaVu Sans", 10, "bold"),
+                padx=20,
+                pady=6,
+                cursor="hand2"
+            )
+            btn_yes.pack(side=tk.RIGHT)
+            btn_no.focus_set()
+        else:
+            btn_ok = tk.Button(
+                btn_frame,
+                text="OK",
+                command=self.on_yes,
+                bg=COLORS['brand'],
+                fg="#FFFFFF",
+                activebackground=COLORS['brand_dark'],
+                activeforeground="#FFFFFF",
+                relief="flat",
+                font=("DejaVu Sans", 10, "bold"),
+                padx=24,
+                pady=6,
+                cursor="hand2"
+            )
+            btn_ok.pack(side=tk.RIGHT)
+            btn_ok.focus_set()
+
+        self.bind("<Escape>", lambda e: self.on_no())
+        self.bind("<Return>", lambda e: self.on_yes() if dialog_type != "yesno" else None)
+
+        self.update_idletasks()
+        px = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{max(0, px)}+{max(0, py)}")
+
+        self.wait_window()
+
+    def on_yes(self):
+        self.result = True
+        self.destroy()
+
+    def on_no(self):
+        self.result = False
+        self.destroy()
+
+
+class AppUninstaller:
     def __init__(self, root):
         self.root = root
-        self.root.title("Управление программами")
+        self.root.title("App Uninstaller")
         self.root.geometry("1040x690")
         self.root.minsize(820, 520)
         self.root.configure(bg=COLORS['bg_main'])
 
-        self.window_icon_ref = None
-        win_icon_path = find_app_window_icon()
-        if win_icon_path:
-            img = load_icon_image(win_icon_path, size=64)
-            if img:
-                self.window_icon_ref = img
-                self.root.iconphoto(True, img)
+        self.set_window_icon()
 
         self.all_packages = []
         self.pkg_icons = {}
@@ -411,6 +502,37 @@ class UninstallerApp:
         self.setup_styles()
         self.build_ui()
         self.load_packages_async()
+
+    def ask_yes_no(self, title, message, is_warning=False):
+        dlg = CustomDialog(self.root, title, message, dialog_type="yesno", is_warning=is_warning)
+        return dlg.result
+
+    def show_info(self, title, message):
+        CustomDialog(self.root, title, message, dialog_type="info", is_warning=False)
+
+    def show_error(self, title, message):
+        CustomDialog(self.root, title, message, dialog_type="info", is_warning=True)
+
+    def set_window_icon(self):
+        icon_candidates = [
+            '/app/share/icons/hicolor/128x128/apps/io.github.moroziv.AppUninstaller.png',
+            '/usr/share/pixmaps/app-uninstaller.png',
+            '/usr/share/icons/hicolor/128x128/apps/app-uninstaller.png',
+            os.path.expanduser('~/.local/share/icons/app-uninstaller.png'),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app-uninstaller.png'),
+        ]
+        for p in icon_candidates:
+            if os.path.exists(p):
+                try:
+                    if HAS_PIL:
+                        pil_img = Image.open(p).convert("RGBA")
+                        self.win_icon = ImageTk.PhotoImage(pil_img)
+                    else:
+                        self.win_icon = tk.PhotoImage(file=p)
+                    self.root.iconphoto(True, self.win_icon)
+                    break
+                except Exception:
+                    pass
 
     def setup_styles(self):
         style = ttk.Style(self.root)
@@ -445,7 +567,7 @@ class UninstallerApp:
             foreground="#FFFFFF",
             borderwidth=0,
             font=self.font_bold,
-            padding=(12, 7)
+            padding=(14, 7)
         )
         style.map(
             "BrandFlat.TButton",
@@ -503,23 +625,24 @@ class UninstallerApp:
         )
 
     def build_ui(self):
-        # 1. Верхняя панель (AppBar)
         appbar = tk.Frame(self.root, bg=COLORS['brand'], height=68)
         appbar.pack(side=tk.TOP, fill=tk.X)
         appbar.pack_propagate(False)
 
-        brand_box = tk.Frame(appbar, bg=COLORS['brand'])
-        brand_box.pack(side=tk.LEFT, padx=20)
+        title_box = tk.Frame(appbar, bg=COLORS['brand'])
+        title_box.pack(side=tk.LEFT, padx=22)
 
-        title_texts = tk.Frame(brand_box, bg=COLORS['brand'])
-        title_texts.pack(side=tk.LEFT)
         tk.Label(
-            title_texts, text="Управление программами",
+            title_box, text="App Uninstaller",
             bg=COLORS['brand'], fg=COLORS['text_on_brand'],
             font=self.font_header
         ).pack(anchor="w")
+
+        sub_text = "View and remove installed applications and packages"
+        if IS_FLATPAK:
+            sub_text += "  •  Flatpak Mode"
         tk.Label(
-            title_texts, text="Просмотр и удаление установленных пакетов",
+            title_box, text=sub_text,
             bg=COLORS['brand'], fg='#FFCDD2',
             font=self.font_sub_header
         ).pack(anchor="w")
@@ -527,7 +650,7 @@ class UninstallerApp:
         controls = tk.Frame(appbar, bg=COLORS['brand'])
         controls.pack(side=tk.RIGHT, padx=20)
 
-        self.filter_var = tk.StringVar(value="Приложения (с иконкой)")
+        self.filter_var = tk.StringVar(value="All packages")
         self.filter_combo = ttk.Combobox(
             controls,
             textvariable=self.filter_var,
@@ -537,12 +660,14 @@ class UninstallerApp:
             font=self.font_body
         )
         self.filter_combo['values'] = (
-            "Приложения (с иконкой)",
-            "Все пакеты",
+            "All packages",
+            "Applications (with icon)",
             "rpm",
             "flatpak",
             "snap",
-            "apt"
+            "apt",
+            "pacman",
+            "zypper"
         )
         self.filter_combo.pack(side=tk.LEFT, padx=(0, 10))
         self.filter_combo.bind("<<ComboboxSelected>>", self.filter_packages)
@@ -572,12 +697,12 @@ class UninstallerApp:
             search_wrap, text="x", bg='#FFFFFF',
             fg=COLORS['text_secondary'], cursor="hand2", font=("DejaVu Sans", 10, "bold")
         )
-        self.btn_clear_search.pack(side=tk.LEFT, padx=(4, 0))
+        self.btn_clear_search.pack(side=tk.LEFT, padx=(2, 2))
         self.btn_clear_search.bind("<Button-1>", self.reset_search)
 
         self.btn_refresh = ttk.Button(
             controls,
-            text="Обновить",
+            text="Refresh",
             style="BrandFlat.TButton",
             command=self.load_packages_async
         )
@@ -590,7 +715,6 @@ class UninstallerApp:
         )
         self.progress.pack(side=tk.TOP, fill=tk.X)
 
-        # 2. Основная рабочая область
         container = tk.Frame(self.root, bg=COLORS['bg_main'])
         container.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=20, pady=(16, 8))
 
@@ -611,10 +735,10 @@ class UninstallerApp:
         )
 
         self.tree.heading('#0', text='')
-        self.tree.heading('name', text='Программа ▲', anchor='w', command=lambda: self.sort_by('name'))
-        self.tree.heading('pkg_id', text='Имя пакета', anchor='w', command=lambda: self.sort_by('id'))
-        self.tree.heading('version', text='Версия', anchor='w', command=lambda: self.sort_by('version'))
-        self.tree.heading('manager', text='Источник', anchor='center', command=lambda: self.sort_by('manager'))
+        self.tree.heading('name', text='Application ▲', anchor='w', command=lambda: self.sort_by('name'))
+        self.tree.heading('pkg_id', text='Package Name', anchor='w', command=lambda: self.sort_by('id'))
+        self.tree.heading('version', text='Version', anchor='w', command=lambda: self.sort_by('version'))
+        self.tree.heading('manager', text='Source', anchor='center', command=lambda: self.sort_by('manager'))
 
         self.tree.column('#0', width=52, minwidth=52, stretch=False, anchor='center')
         self.tree.column('name', width=320, minwidth=180, anchor='w')
@@ -637,7 +761,6 @@ class UninstallerApp:
         self.tree.bind('<Motion>', self.on_tree_hover)
         self.tree.bind('<Leave>', self.on_tree_leave)
 
-        # 3. Карточка информации о выбранном пакете
         info_card = tk.Frame(
             container,
             bg=COLORS['bg_card'],
@@ -653,40 +776,36 @@ class UninstallerApp:
 
         self.lbl_pkg_title = ttk.Label(
             info_inner,
-            text="Выберите программу в списке для просмотра подробностей",
+            text="Select an application from the list to view details",
             style="InfoTitle.TLabel"
         )
         self.lbl_pkg_title.pack(anchor="w")
 
         self.lbl_pkg_desc = ttk.Label(
             info_inner,
-            text="Двойной клик по строке или нажатие кнопки «Удалить программу» запустит деинсталляцию.",
+            text="Double-click a row or click «Uninstall» to remove the selected package.",
             style="InfoText.TLabel"
         )
         self.lbl_pkg_desc.pack(anchor="w", pady=(2, 0))
 
-        # 4. Нижняя панель (Footer)
         footer = tk.Frame(self.root, bg=COLORS['bg_main'], height=56)
         footer.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(0, 10))
 
-        self.status_label = ttk.Label(footer, text="Инициализация...", style="Sub.TLabel")
+        self.status_label = ttk.Label(footer, text="Initializing...", style="Sub.TLabel")
         self.status_label.pack(side=tk.LEFT, pady=10)
 
         self.btn_remove = ttk.Button(
             footer,
-            text="Удалить программу",
+            text="Uninstall",
             style="Danger.TButton",
             command=self.remove_selected
         )
         self.btn_remove.pack(side=tk.RIGHT, pady=6)
 
-    # ==========================================
-    # Логика плейсхолдера поиска и наведения
-    # ==========================================
     def set_placeholder(self):
         self.placeholder_active = True
         self.search_entry.config(fg=COLORS['text_secondary'])
-        self.search_var.set("Поиск программы...")
+        self.search_var.set("Search application...")
 
     def clear_placeholder(self, event=None):
         if self.placeholder_active:
@@ -726,9 +845,6 @@ class UninstallerApp:
             self.tree.item(self.hovered_item, tags=(base_tag,))
         self.hovered_item = None
 
-    # ==========================================
-    # Просмотр деталей о выбранном пакете
-    # ==========================================
     def on_select_package(self, event=None):
         selection = self.tree.selection()
         if not selection:
@@ -736,8 +852,8 @@ class UninstallerApp:
         values = self.tree.item(selection[0])['values']
         disp_name, pkg_id, version, manager = str(values[0]), str(values[1]), str(values[2]), str(values[3])
 
-        self.lbl_pkg_title.config(text=f"{disp_name}  ({pkg_id}  •  {version})")
-        self.lbl_pkg_desc.config(text="Получение описания пакета...")
+        self.lbl_pkg_title.config(text=f"{disp_name}  ({pkg_id} • {version})")
+        self.lbl_pkg_desc.config(text="Fetching package details...")
 
         threading.Thread(
             target=self.fetch_package_summary,
@@ -746,33 +862,33 @@ class UninstallerApp:
         ).start()
 
     def fetch_package_summary(self, pkg_id, manager):
-        summary = "Описание недоступно."
+        summary = "Description unavailable."
         try:
             if manager == 'rpm':
                 out = subprocess.check_output(
-                    wrap_host_cmd(['rpm', '-q', '--qf', '%{SUMMARY} (Размер: %{SIZE} байт)', pkg_id]),
+                    host_cmd(['rpm', '-q', '--qf', '%{SUMMARY} (Size: %{SIZE} bytes)', pkg_id]),
                     universal_newlines=True,
                     stderr=subprocess.DEVNULL
                 )
-                if '(Размер: ' in out:
-                    text_part, size_part = out.split('(Размер: ')
-                    size_bytes = int(size_part.replace(' байт)', '').strip())
+                if '(Size: ' in out:
+                    text_part, size_part = out.split('(Size: ')
+                    size_bytes = int(size_part.replace(' bytes)', '').strip())
                     size_mb = round(size_bytes / (1024 * 1024), 1)
-                    summary = f"{text_part.strip()}  •  Размер на диске: ~{size_mb} МБ"
+                    summary = f"{text_part.strip()}  •  Installed size: ~{size_mb} MB"
                 else:
                     summary = out.strip()
             elif manager == 'flatpak':
                 out = subprocess.check_output(
-                    wrap_host_cmd(['flatpak', 'info', pkg_id]),
+                    host_cmd(['flatpak', 'info', pkg_id]),
                     universal_newlines=True,
                     stderr=subprocess.DEVNULL
                 )
                 lines = [l.strip() for l in out.splitlines() if l.strip()]
                 if len(lines) > 1:
-                    summary = f"Приложение Flatpak: {lines[1]}"
+                    summary = f"Flatpak Application: {lines[1]}"
             elif manager == 'apt':
                 out = subprocess.check_output(
-                    wrap_host_cmd(['dpkg-query', '-W', '-f=${binary:Summary}', pkg_id]),
+                    host_cmd(['dpkg-query', '-W', '-f=${binary:Summary}', pkg_id]),
                     universal_newlines=True,
                     stderr=subprocess.DEVNULL
                 )
@@ -782,15 +898,12 @@ class UninstallerApp:
 
         self.root.after(0, lambda: self.lbl_pkg_desc.config(text=summary))
 
-    # ==========================================
-    # Асинхронная загрузка данных и иконок
-    # ==========================================
     def load_packages_async(self):
         self.btn_refresh.config(state='disabled')
         self.btn_remove.config(state='disabled')
         self.tree.delete(*self.tree.get_children())
         self.icon_refs.clear()
-        self.status_label.config(text="Сканирование установленных пакетов и иконок...")
+        self.status_label.config(text="Scanning installed packages and icons...")
         self.progress.start(12)
 
         threading.Thread(target=self.load_packages_thread, daemon=True).start()
@@ -813,7 +926,7 @@ class UninstallerApp:
             elif m == 'zypper':
                 packages.extend(get_packages_zypper())
 
-        desktop_icons, ru_names = load_desktop_metadata()
+        desktop_icons, app_names = load_desktop_metadata()
         icon_index = build_icon_index()
 
         matched_paths = {}
@@ -821,7 +934,7 @@ class UninstallerApp:
             name_low = pkg['name'].lower()
             id_low = pkg['id'].lower()
 
-            pretty_name = ru_names.get(id_low) or ru_names.get(name_low) or pkg['name']
+            pretty_name = app_names.get(id_low) or app_names.get(name_low) or pkg['name']
             pkg['display_name'] = pretty_name
 
             icon_key = (
@@ -830,7 +943,7 @@ class UninstallerApp:
                 or id_low
             )
 
-            if icon_key and os.path.isabs(icon_key) and os.path.exists(host_path(icon_key)):
+            if icon_key and os.path.isabs(icon_key) and os.path.exists(resolve_host_path(icon_key)):
                 matched_paths[id_low] = icon_key
                 continue
 
@@ -858,9 +971,6 @@ class UninstallerApp:
         self.sort_packages_data()
         self.filter_packages()
 
-    # ==========================================
-    # Сортировка и фильтрация
-    # ==========================================
     def sort_by(self, col):
         if self.sort_col == col:
             self.sort_reverse = not self.sort_reverse
@@ -870,10 +980,10 @@ class UninstallerApp:
 
         arrow = " ▼" if self.sort_reverse else " ▲"
         headers = {
-            'name': 'Программа',
-            'id': 'Имя пакета',
-            'version': 'Версия',
-            'manager': 'Источник'
+            'name': 'Application',
+            'id': 'Package Name',
+            'version': 'Version',
+            'manager': 'Source'
         }
         col_map = {'name': 'name', 'id': 'pkg_id', 'version': 'version', 'manager': 'manager'}
         for key, title in headers.items():
@@ -905,9 +1015,9 @@ class UninstallerApp:
             mgr = pkg['manager']
             has_custom_icon = id_low in self.pkg_icons
 
-            if mode == "Приложения (с иконкой)" and not has_custom_icon:
+            if mode == "Applications (with icon)" and not has_custom_icon:
                 continue
-            elif mode not in ("Все пакеты", "Приложения (с иконкой)") and mgr != mode:
+            elif mode not in ("All packages", "Applications (with icon)") and mgr != mode:
                 continue
 
             if query and (query not in disp_low and query not in id_low):
@@ -927,18 +1037,14 @@ class UninstallerApp:
             )
             shown += 1
 
-        env_note = "  •  Режим Flatpak" if IS_FLATPAK else ""
         self.status_label.config(
-            text=f"Показано: {shown} из {len(self.all_packages)}  •  Приложений с иконками: {len(self.pkg_icons)}{env_note}"
+            text=f"Showing: {shown} of {len(self.all_packages)}  •  Applications with icons: {len(self.pkg_icons)}"
         )
 
-    # ==========================================
-    # Удаление программ
-    # ==========================================
     def remove_selected(self):
         selection = self.tree.selection()
         if not selection:
-            messagebox.showwarning("Внимание", "Выберите программу из списка для удаления.")
+            self.show_info("Notice", "Please select an application from the list to uninstall.")
             return
 
         values = self.tree.item(selection[0])['values']
@@ -951,29 +1057,29 @@ class UninstallerApp:
             None
         )
         if not pkg:
-            messagebox.showerror("Ошибка", "Не удалось определить пакет для удаления.")
+            self.show_error("Error", "Could not identify the selected package for removal.")
             return
 
         if pkg_id.lower() in CRITICAL_PACKAGES:
-            if not messagebox.askyesno(
-                "Критически важный пакет системы!",
-                f"Пакет «{pkg_id}» является системным компонентом.\n"
-                "Его удаление может сделать систему неработоспособной!\n\n"
-                "Вы абсолютно уверены, что хотите продолжить?",
-                icon='warning'
+            if not self.ask_yes_no(
+                "Critical System Package!",
+                f"Package «{pkg_id}» is a critical operating system component.\n"
+                "Removing it may render your system unbootable or broken!\n\n"
+                "Are you absolutely sure you want to continue?",
+                is_warning=True
             ):
                 return
 
-        if not messagebox.askyesno(
-            "Подтверждение удаления",
-            f"Удалить «{disp_name}» (пакет: {pkg_id}, {manager.upper()})?\n\n"
-            "Зависимые пакеты также могут быть удалены."
+        if not self.ask_yes_no(
+            "Confirm Removal",
+            f"Uninstall «{disp_name}» (package: {pkg_id}, {manager.upper()})?\n\n"
+            "Dependent packages may also be removed."
         ):
             return
 
         cmd, need_root = self.build_remove_command(pkg)
         if not cmd:
-            messagebox.showerror("Ошибка", "Неизвестный пакетный менеджер.")
+            self.show_error("Error", "Unknown package manager.")
             return
 
         self.run_remove_command(cmd, need_root)
@@ -1004,28 +1110,29 @@ class UninstallerApp:
 
     def run_remove_command(self, cmd, need_root):
         self.btn_remove.config(state='disabled')
-        self.status_label.config(text=f"Выполняется удаление: {' '.join(cmd)}...")
+        self.status_label.config(text=f"Removing: {' '.join(cmd)}...")
         self.progress.start(12)
 
         if need_root:
             if host_which('pkexec'):
-                full_cmd = wrap_host_cmd(['pkexec'] + cmd)
+                full_cmd = host_cmd(['pkexec'] + cmd)
                 threading.Thread(target=self.execute_removal, args=(full_cmd,), daemon=True).start()
             else:
                 term, flag = find_terminal()
                 if term:
                     sudo_cmd = ['sudo'] + cmd
-                    raw_term_cmd = [term, '--'] + sudo_cmd if flag == '--' else [term, flag, ' '.join(sudo_cmd)]
-                    subprocess.Popen(wrap_host_cmd(raw_term_cmd))
+                    raw_cmd = [term, '--'] + sudo_cmd if flag == '--' else [term, flag, ' '.join(sudo_cmd)]
+                    subprocess.Popen(host_cmd(raw_cmd))
                     self.progress.stop()
                     self.btn_remove.config(state='normal')
-                    messagebox.showinfo("Удаление", "Процесс удаления запущен в окне терминала.")
+                    self.show_info("Removal", "Removal process started in a terminal window.")
                 else:
                     self.progress.stop()
                     self.btn_remove.config(state='normal')
-                    messagebox.showerror("Ошибка", "Не найден pkexec или терминал для повышения прав.")
+                    self.show_error("Error", "Neither pkexec nor a terminal emulator was found for privilege elevation.")
         else:
-            threading.Thread(target=self.execute_removal, args=(wrap_host_cmd(cmd),), daemon=True).start()
+            full_cmd = host_cmd(cmd)
+            threading.Thread(target=self.execute_removal, args=(full_cmd,), daemon=True).start()
 
     def execute_removal(self, cmd):
         try:
@@ -1034,24 +1141,24 @@ class UninstallerApp:
             self.root.after(0, lambda: self.btn_remove.config(state='normal'))
 
             if result.returncode == 0:
-                msg = "Программа успешно удалена."
+                msg = "Application was successfully uninstalled."
                 if result.stdout:
                     msg += "\n\n" + result.stdout[-400:]
-                self.root.after(0, lambda: messagebox.showinfo("Готово", msg))
+                self.root.after(0, lambda: self.show_info("Done", msg))
                 self.root.after(0, self.load_packages_async)
             else:
-                msg = "Не удалось удалить программу."
+                msg = "Failed to uninstall the application."
                 if result.stderr:
                     msg += "\n\n" + result.stderr[-400:]
-                self.root.after(0, lambda: messagebox.showerror("Ошибка удаления", msg))
-                self.root.after(0, lambda: self.status_label.config(text="Ошибка при удалении."))
+                self.root.after(0, lambda: self.show_error("Removal Error", msg))
+                self.root.after(0, lambda: self.status_label.config(text="Error during removal."))
         except Exception as e:
             self.root.after(0, self.progress.stop)
             self.root.after(0, lambda: self.btn_remove.config(state='normal'))
-            self.root.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
+            self.root.after(0, lambda: self.show_error("Error", str(e)))
 
 
 if __name__ == '__main__':
     root = tk.Tk()
-    app = UninstallerApp(root)
+    app = AppUninstaller(root)
     root.mainloop()

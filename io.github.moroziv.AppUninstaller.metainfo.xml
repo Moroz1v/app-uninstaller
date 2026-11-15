@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.moroziv.AppUninstaller</id>
+  <name>App Uninstaller</name>
+  <summary>View and remove installed applications and packages</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.moroziv">
+    <name>Moroz1v</name>
+  </developer>
+  <description>
+    <p>
+      A lightweight and intuitive graphical manager for viewing and uninstalling applications and system packages on Linux.
+    </p>
+    <ul>
+      <li>Multi-format support: RPM (dnf/yum), Flatpak, Snap, APT (dpkg), Pacman, and Zypper</li>
+      <li>Application filter showing all packages or only GUI apps with icons</li>
+      <li>Fast live search and column sorting</li>
+      <li>Package summary and disk size inspection</li>
+      <li>Built-in protection against removing critical system packages</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.moroziv.AppUninstaller.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main application window</caption>
+      <image>https://githubusercontent.com</image>
+    </screenshot>
+  </screenshots>
+  <url type="homepage">https://github.com</url>
+  <url type="bugtracker">https://github.com/issues</url>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="1.1" date="2026-11-15">
+      <description>
+        <p>Full English interface, custom confirmation dialogs, and AppStream metadata for Flathub.</p>
+      </description>
+    </release>
+  </releases>
+</component>

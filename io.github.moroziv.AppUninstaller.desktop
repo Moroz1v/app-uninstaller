@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=App Uninstaller
+Comment=View and remove installed applications and packages
+Exec=app-uninstaller
+Icon=io.github.moroziv.AppUninstaller
+Terminal=false
+Type=Application
+Categories=System;Settings;
+StartupWMClass=Tk

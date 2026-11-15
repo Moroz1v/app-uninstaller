@@ -1,31 +1,33 @@
-# Управление программами (App Uninstaller)
+# App Uninstaller
 
-Лёгкий и наглядный графический менеджер для просмотра и удаления установленных программ и системных пакетов в Linux.
+![App Uninstaller Screenshot](screenshot.png)
 
-## Возможности
-- **Мультиплатформенность**: автоматическое определение и работа с `RPM` (`dnf`/`yum`), `Flatpak`, `Snap`, `APT` (`dpkg`), `Pacman` и `Zypper`.
-- **Фильтр приложений**: отдельный режим отображения только пользовательских программ с иконками (скрывает тысячи системных библиотек).
-- **Быстрый поиск и сортировка**: живой поиск по названию или имени пакета, сортировка по любому столбцу.
-- **Подробная информация**: просмотр описания пакета и занимаемого места на диске перед удалением.
-- **Защита системы**: предупреждение при попытке удалить критически важные компоненты ОС (`kernel`, `systemd`, `glibc`, `dnf` и др.).
-- **Поддержка песочницы Flatpak**: корректная работа с пакетами хост-системы через `flatpak-spawn --host`.
+A lightweight and intuitive graphical manager for viewing and uninstalling applications and system packages on Linux.
 
-## Установка
+## Features
+- **Multi-format support**: Automatically detects and manages `RPM` (`dnf`/`yum`), `Flatpak`, `Snap`, `APT` (`dpkg`), `Pacman`, and `Zypper`.
+- **Application filter**: Switch between all system packages and GUI applications with icons.
+- **Fast search & sorting**: Live search by name or package ID and column sorting.
+- **Package details**: Inspect package summary and disk usage before removal.
+- **System protection**: Warning prompt before removing critical OS components (`kernel`, `systemd`, `glibc`, `dnf`, etc.).
+- **Flatpak Sandbox support**: Works seamlessly inside Flatpak via `flatpak-spawn --host`.
 
-### 1. Для RPM-дистрибутивов (РЕД ОС, Fedora, ALT, ROSA)
-Скачайте файл `app-uninstaller-1.0-4.red80.noarch.rpm` из раздела **[Releases](https://github.com)** и установите его:
+## Installation
+
+### 1. RPM-based distributions (Red OS, Fedora, ALT, ROSA)
+Download the `.rpm` file from **[Releases](https://github.com/releases)** and install it:
 ```bash
-sudo dnf install ./app-uninstaller-1.0-4.red80.noarch.rpm
+sudo dnf install ./app-uninstaller-*.noarch.rpm
 ```
 
-### 2. Для любых дистрибутивов Linux (Flatpak)
-Скачайте файл `app-uninstaller.flatpak` из раздела **[Releases](https://github.com)** и установите его:
+### 2. Any Linux distribution (Flatpak)
+Download the `.flatpak` file from **[Releases](https://github.com/releases)** and install it:
 ```bash
 flatpak install --user ./app-uninstaller.flatpak
 ```
 
-### 3. Запуск из исходного кода
-Требуется Python 3 и `tkinter` (опционально `python3-pillow` для сглаживания иконок):
+### 3. Run from source
+Requires Python 3 and `tkinter` (optional `python3-pillow` for smooth icons):
 ```bash
 python3 uninstaller.py
 ```
